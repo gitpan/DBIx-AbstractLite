@@ -55,12 +55,15 @@ Unlike Abstract, AbstractLite is not 100% abstract in that it still allows
 conventional access to the DBI interface, 
 using plain SQL and the DBI statement handle methods.
 
+CGI::LogCarp is used internally to trace the queries sent to DBI.
+To see the trace statements, add this statement at the beginning of your program:
+  use CGI::LogCarp qw(:STDBUG);
+
+
+
 MORE DOCUMENTATION TBD...
 
 =cut
-
-require Exporter;
-require AutoLoader;
 
 use DBI;
 use Error::Dumb;
@@ -68,8 +71,9 @@ use CGI::LogCarp qw(:STDBUG);
 
 use vars qw($VERSION @ISA);
 
-@ISA = qw(Exporter AutoLoader Error::Dumb);
-$VERSION = do { my @r=(q$Revision: 1.2 $=~/\d+/g); sprintf "%d."."%02d"x$#r,@r };
+@ISA = qw(Error::Dumb);
+$VERSION = do { my @r=(q$Revision: 1.5 $=~/\d+/g); sprintf "%d."."%02d"x$#r,@r };
+
 
 sub new {
   my ($class) = @_;
@@ -82,7 +86,7 @@ sub new {
   $self->_initMembers() if $self->can('_initMembers');
 
   $self->{DBH} = $self->connect() or die $DBI::errstr;
-  debug "$self->{DSN} successfully connected\n";
+  trace "$self->{DSN} successfully connected\n";
 
   return $self;
 }
@@ -90,10 +94,11 @@ sub new {
 sub DESTROY {
   my ($self) = @_;
 
-# don't destroy if running under mod_perl and Apache::DBI
+  $self->{STH}->finish() if $self->{STH};
+
+# don't disconnect if running under mod_perl and Apache::DBI
   return if $ENV{MOD_PERL};
 
-  $self->{STH}->finish() if $self->{STH};
   $self->disconnect() if $self;
 }
 
@@ -114,6 +119,8 @@ sub select {
 
   my @bind = ();
   my @where = ();
+
+  $args->{fields_global} = $self->{FIELDS};
 
 # convert aliases
   while ( my ($alias, $real) = each %aliases ) {
@@ -141,6 +148,7 @@ sub select {
     }
   }
 
+  $args->{fields} .= ", $args->{fields_global}" if $args->{fields_global};
   my $query = "SELECT $args->{fields} FROM $args->{table} ";
   if ( $args->{where} ) {
     while ( my ($key, $value) = each %{ $args->{where} } ) {
@@ -187,7 +195,7 @@ sub _query {
 
   my @args = @{ $self->{BIND} };
   my $args = join ',', @args;
-  debug "$self->{DSN} query: $self->{QUERY}; args: $args\n";
+  trace "$self->{DSN} query: $self->{QUERY}; args: $args\n";
   $self->{STH} = $self->{DBH}->prepare($self->{QUERY}) 
     or return $self->_setError($self->{DBH}->errstr);
   $self->{STH}->execute(@args) or return $self->_setError($self->{STH}->errstr);
@@ -236,6 +244,12 @@ sub getWhere {
   }
 }
 
+sub setFields {
+  my ($self, $field) = @_;
+
+  push @{ $self->{FIELDS} }, $field;
+}
+
 sub getDistinct {
   my ($self, $colname, $table) = @_;
 
@@ -261,8 +275,6 @@ Ilia Lobsanov <ilia@lobsanov.com>
 =head1 COPYRIGHT
 
   Copyright (c) 2001 Ilia Lobsanov, Nurey Networks Inc.
-  Written under contract with GlobalNetwork Technology Services 
-  for Rogers Communications Inc.
 
 This program is free software; you can redistribute it and/or modify it under the same terms as Perl itself. 
 
